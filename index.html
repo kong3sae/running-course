@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>한바퀴 코스</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Noto+Sans+KR:wght@400;600;700&display=swap">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+/* 지도 전체 화면 + 아래(폰) / 왼쪽(PC) 조작판 */
+:root{
+  --bg:#f3f6f4; --panel:#ffffff; --fg:#17201b; --muted:#5d6b63; --line:#dfe6e1;
+  --accent:#0f8a5f; --accent-fg:#ffffff;
+  --c1:#0f8a5f; --c2:#d9480f; --c3:#3b5bdb;
+  --display:"Space Grotesk","Noto Sans KR",system-ui,sans-serif;
+  --body:"Noto Sans KR",system-ui,-apple-system,"Segoe UI",sans-serif;
+}
+@media (prefers-color-scheme: dark){:root{
+  --bg:#0f1512; --panel:#18211c; --fg:#e6eee9; --muted:#9aaba1; --line:#2a362f;
+  --accent:#2fbf86; --accent-fg:#06110b; color-scheme:dark;
+}}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--fg);font-family:var(--body);font-size:15px}
+#app{height:100%;display:flex;flex-direction:column}
+#map{flex:1;min-height:0}
+#panel{background:var(--panel);border-top:1px solid var(--line);
+  padding:14px max(16px,env(safe-area-inset-right,0px)) calc(14px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px));
+  max-height:52%;overflow-y:auto;display:flex;flex-direction:column;gap:12px}
+@media (min-width:820px){
+  #app{flex-direction:row-reverse}
+  #panel{width:360px;max-height:none;border-top:0;border-right:1px solid var(--line)}
+}
+h1{font-family:var(--display);font-size:20px;margin:0;letter-spacing:-.01em}
+h1 small{font-family:var(--body);font-weight:400;font-size:12px;color:var(--muted);margin-left:6px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.label{font-size:12px;color:var(--muted);letter-spacing:.04em}
+.chip{border:1px solid var(--line);background:transparent;color:var(--fg);border-radius:999px;
+  padding:7px 13px;font:600 14px var(--display);cursor:pointer}
+.chip[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--accent-fg)}
+input[type=number],input[type=text]{width:76px;padding:7px 8px;border:1px solid var(--line);border-radius:8px;
+  background:var(--bg);color:var(--fg);font:600 14px var(--display)}
+.btn{border:0;border-radius:10px;padding:11px 14px;font:700 15px var(--body);cursor:pointer}
+.btn.primary{background:var(--accent);color:var(--accent-fg);flex:1}
+.btn.ghost{background:transparent;color:var(--fg);border:1px solid var(--line)}
+.btn:disabled{opacity:.5;cursor:wait}
+button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+#status{font-size:13px;color:var(--muted);min-height:1.2em}
+#status.err{color:#c92a2a}
+#cands{display:flex;flex-direction:column;gap:8px}
+.cand{display:grid;grid-template-columns:14px 1fr auto;gap:10px;align-items:center;
+  border:1px solid var(--line);border-radius:10px;padding:10px 12px;cursor:pointer;background:transparent;color:var(--fg);text-align:left;font:inherit}
+.cand[aria-pressed="true"]{border-color:var(--fg)}
+.dot{width:14px;height:14px;border-radius:50%}
+.cand b{font:700 18px var(--display);font-variant-numeric:tabular-nums}
+.cand .sub{font-size:12px;color:var(--muted)}
+.gpx{font-size:13px;padding:7px 10px}
+.hint{font-size:12px;color:var(--muted);line-height:1.5}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="map" aria-label="지도"></div>
+  <div id="panel">
+    <h1>한바퀴 코스<small>출발점으로 돌아오는 순환 코스</small></h1>
+
+    <div class="row">
+      <button class="btn ghost" id="locBtn" type="button">📍 내 위치</button>
+      <span class="hint">또는 지도를 눌러 출발점을 정하세요</span>
+    </div>
+
+    <div>
+      <div class="label">거리</div>
+      <div class="row" id="distChips" style="margin-top:6px">
+        <button class="chip" type="button" data-km="3">3km</button>
+        <button class="chip" type="button" data-km="5" aria-pressed="true">5km</button>
+        <button class="chip" type="button" data-km="7">7km</button>
+        <button class="chip" type="button" data-km="10">10km</button>
+        <input type="number" id="kmInput" min="1" max="30" step="0.5" value="5" aria-label="거리 직접 입력(km)"> km
+      </div>
+    </div>
+
+    <div class="row">
+      <span class="label">페이스</span>
+      <input type="text" id="paceInput" value="6:00" aria-label="페이스(분:초 / km)"> /km
+    </div>
+
+    <div class="row">
+      <button class="btn primary" id="goBtn" type="button">코스 3개 만들기</button>
+    </div>
+    <div id="status"></div>
+    <div id="cands"></div>
+    <p class="hint">길 데이터: OpenStreetMap 보행자 경로. 실제 통행 가능 여부(공사, 사유지, 야간 안전)는 직접 확인하세요.</p>
+  </div>
+</div>
+
+<script>
+const OSRM = 'https://routing.openstreetmap.de/routed-foot/route/v1/foot/';
+const COLORS = ['--c1','--c2','--c3'].map(v => getComputedStyle(document.documentElement).getPropertyValue(v).trim());
+const R = 6371; // km
+const toRad = d => d * Math.PI / 180, toDeg = r => r * 180 / Math.PI;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// ---------- 지도 ----------
+const map = L.map('map', {zoomControl:true}).setView([37.5283, 126.9326], 14); // 여의도 한강공원 (예시 출발점)
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19,
+  attribution: '&copy; OpenStreetMap contributors'
+}).addTo(map);
+
+let start = [37.5283, 126.9326];
+const startMarker = L.marker(start, {draggable:true, title:'출발점'}).addTo(map).bindTooltip('출발', {permanent:true, direction:'top', offset:[-15,-12]});
+startMarker.on('dragend', e => { const p = e.target.getLatLng(); start = [p.lat, p.lng]; });
+map.on('click', e => { start = [e.latlng.lat, e.latlng.lng]; startMarker.setLatLng(e.latlng); });
+
+let layers = [], cands = [], selected = 0;
+
+// ---------- 내 위치 ----------
+const $ = id => document.getElementById(id);
+const status = (msg, err) => { $('status').textContent = msg; $('status').className = err ? 'err' : ''; };
+$('locBtn').onclick = () => {
+  if (!navigator.geolocation) return status('이 브라우저는 위치를 지원하지 않아요. 지도를 눌러 주세요.', true);
+  status('위치 찾는 중…');
+  navigator.geolocation.getCurrentPosition(
+    p => { start = [p.coords.latitude, p.coords.longitude]; startMarker.setLatLng(start); map.setView(start, 15); status('내 위치를 출발점으로 정했어요.'); },
+    e => status('위치를 못 가져왔어요(' + e.message + '). 지도를 눌러 출발점을 정하세요.', true),
+    {enableHighAccuracy:true, timeout:10000}
+  );
+};
+
+// ---------- 거리 선택 ----------
+document.querySelectorAll('#distChips .chip').forEach(b => b.onclick = () => {
+  document.querySelectorAll('#distChips .chip').forEach(x => x.setAttribute('aria-pressed', x === b));
+  $('kmInput').value = b.dataset.km;
+});
+$('kmInput').oninput = () => document.querySelectorAll('#distChips .chip')
+  .forEach(x => x.setAttribute('aria-pressed', x.dataset.km === $('kmInput').value));
+
+// ---------- 계산 ----------
+// 기준점에서 bearing(북=0, 동=π/2) 방향으로 km만큼 떨어진 점 (짧은 거리 근사)
+function offset([lat, lon], km, b) {
+  return [lat + toDeg(km / R * Math.cos(b)), lon + toDeg(km / R * Math.sin(b) / Math.cos(toRad(lat)))];
+}
+function haversine([a1, o1], [a2, o2]) {
+  const dA = toRad(a2 - a1), dO = toRad(o2 - o1);
+  const h = Math.sin(dA/2)**2 + Math.cos(toRad(a1)) * Math.cos(toRad(a2)) * Math.sin(dO/2)**2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+// 출발점이 원 위에 오도록 원 중심을 theta 방향으로 r만큼 옮기고, 원 위 3점을 경유
+function loopPoints(s, r, theta) {
+  const c = offset(s, r, theta), pts = [s];
+  for (let i = 1; i <= 3; i++) pts.push(offset(c, r, theta + Math.PI + i * Math.PI / 2));
+  pts.push(s);
+  return pts;
+}
+async function route(pts) {
+  const q = pts.map(p => p[1].toFixed(6) + ',' + p[0].toFixed(6)).join(';');
+  const res = await fetch(OSRM + q + '?overview=full&geometries=geojson');
+  if (!res.ok) throw new Error('경로 서버 응답 ' + res.status);
+  const j = await res.json();
+  if (j.code !== 'Ok' || !j.routes?.length) throw new Error('경로를 못 찾았어요 (' + (j.message || j.code) + ')');
+  return { km: j.routes[0].distance / 1000, coords: j.routes[0].geometry.coordinates.map(c => [c[1], c[0]]) };
+}
+// 같은 길을 되밟는 비율 (앞에서 지나간 점과 15m 이내로 다시 붙는 점의 비율)
+function overlapRatio(coords) {
+  const pts = []; // 약 20m 간격으로 다시 샘플
+  for (let i = 0; i < coords.length - 1; i++) {
+    const a = coords[i], b = coords[i+1], d = haversine(a, b), n = Math.max(1, Math.ceil(d / 0.02));
+    for (let k = 0; k < n; k++) pts.push([a[0] + (b[0]-a[0]) * k / n, a[1] + (b[1]-a[1]) * k / n]);
+  }
+  let hit = 0;
+  for (let i = 0; i < pts.length; i++) {
+    for (let j = 0; j < i - 8; j++) if (haversine(pts[i], pts[j]) < 0.015) { hit++; break; }
+  }
+  return pts.length ? hit / pts.length : 0;
+}
+async function makeLoop(s, D, theta) {
+  let r = D / (4 * Math.SQRT2 * 1.3), best = null; // 정사각형 둘레 ≈ 5.66r, 도로 굴곡 1.3배 가정
+  for (let it = 0; it < 4; it++) {
+    const res = await route(loopPoints(s, r, theta));
+    if (!best || Math.abs(res.km - D) < Math.abs(best.km - D)) best = res;
+    if (Math.abs(res.km - D) / D < 0.06) break;
+    r *= D / res.km;
+    await sleep(300);
+  }
+  best.overlap = overlapRatio(best.coords);
+  return best;
+}
+
+function parsePace() {
+  const m = /^(\d{1,2}):(\d{2})$/.exec($('paceInput').value.trim());
+  return m ? +m[1] + +m[2] / 60 : 6;
+}
+function fmtTime(min) {
+  const h = Math.floor(min / 60), m = Math.round(min % 60);
+  return h ? `${h}시간 ${m}분` : `${m}분`;
+}
+
+function draw() {
+  layers.forEach(l => map.removeLayer(l)); layers = [];
+  cands.forEach((c, i) => {
+    if (i === selected) return;
+    layers.push(L.polyline(c.coords, {color: COLORS[i], weight: 4, opacity: .35}).addTo(map));
+  });
+  const c = cands[selected];
+  if (c) {
+    const line = L.polyline(c.coords, {color: COLORS[selected], weight: 6, opacity: .95}).addTo(map);
+    layers.push(line);
+    map.fitBounds(line.getBounds(), {padding: [30, 30]});
+  }
+  const pace = parsePace();
+  $('cands').innerHTML = '';
+  cands.forEach((c, i) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'cand'; b.setAttribute('aria-pressed', i === selected);
+    b.innerHTML = `<span class="dot" style="background:${COLORS[i]}"></span>
+      <span><b>${c.km.toFixed(2)} km</b><br><span class="sub">약 ${fmtTime(c.km * pace)} · 겹치는 길 약 ${Math.round(c.overlap * 100)}%</span></span>
+      <span class="btn ghost gpx" role="button" tabindex="0" data-i="${i}">GPX</span>`;
+    b.onclick = e => {
+      if (e.target.classList.contains('gpx')) { saveGpx(i); return; }
+      selected = i; draw();
+    };
+    $('cands').appendChild(b);
+  });
+}
+
+function saveGpx(i) {
+  const c = cands[i];
+  const pts = c.coords.map(p => `<trkpt lat="${p[0].toFixed(6)}" lon="${p[1].toFixed(6)}"></trkpt>`).join('\n');
+  const gpx = `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="한바퀴 코스" xmlns="http://www.topografix.com/GPX/1/1">
+<trk><name>순환 ${c.km.toFixed(1)}km</name><trkseg>
+${pts}
+</trkseg></trk></gpx>`;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([gpx], {type: 'application/gpx+xml'}));
+  a.download = `loop-${c.km.toFixed(1)}km.gpx`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+
+$('goBtn').onclick = async () => {
+  const D = parseFloat($('kmInput').value);
+  if (!(D >= 1 && D <= 30)) return status('거리는 1~30km 사이로 넣어 주세요.', true);
+  $('goBtn').disabled = true;
+  cands = []; selected = 0; draw();
+  const base = Math.random() * 2 * Math.PI;
+  try {
+    for (let k = 0; k < 3; k++) {
+      status(`코스 ${k + 1}/3 계산 중…`);
+      cands.push(await makeLoop(start, D, base + k * 2 * Math.PI / 3));
+      draw();
+    }
+    status(`${D}km 코스 3개를 만들었어요. 눌러서 골라 보세요.`);
+  } catch (e) {
+    status('실패: ' + e.message + ' (인터넷 연결 또는 출발점 위치를 확인하세요)', true);
+  } finally {
+    $('goBtn').disabled = false;
+  }
+};
+</script>
+</body>
+</html>
