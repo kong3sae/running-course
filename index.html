@@ -8,257 +8,726 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Noto+Sans+KR:wght@400;600;700&display=swap">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
-/* 지도 전체 화면 + 아래(폰) / 왼쪽(PC) 조작판 */
+/* 지도 전체 화면 + 아래(폰) / 왼쪽(PC) 조작판, 달리기 중엔 위쪽 계기판 */
 :root{
   --bg:#f3f6f4; --panel:#ffffff; --fg:#17201b; --muted:#5d6b63; --line:#dfe6e1;
-  --accent:#0f8a5f; --accent-fg:#ffffff;
+  --accent:#0f8a5f; --accent-fg:#ffffff; --warn:#c92a2a; --ok:#0f8a5f; --okbg:#e3f5ec; --warnbg:#fdecec;
   --c1:#0f8a5f; --c2:#d9480f; --c3:#3b5bdb;
   --display:"Space Grotesk","Noto Sans KR",system-ui,sans-serif;
   --body:"Noto Sans KR",system-ui,-apple-system,"Segoe UI",sans-serif;
 }
 @media (prefers-color-scheme: dark){:root{
   --bg:#0f1512; --panel:#18211c; --fg:#e6eee9; --muted:#9aaba1; --line:#2a362f;
-  --accent:#2fbf86; --accent-fg:#06110b; color-scheme:dark;
+  --accent:#2fbf86; --accent-fg:#06110b; --warn:#ff6b6b; --ok:#2fbf86; --okbg:#173327; --warnbg:#3a1d1d; color-scheme:dark;
 }}
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 html,body{height:100%;margin:0}
 body{background:var(--bg);color:var(--fg);font-family:var(--body);font-size:15px}
-#app{height:100%;display:flex;flex-direction:column}
-#map{flex:1;min-height:0}
+#app{height:100%;display:flex;flex-direction:column;position:relative}
+#mapWrap{flex:1;min-height:0;position:relative}
+#map{position:absolute;inset:0}
 #panel{background:var(--panel);border-top:1px solid var(--line);
-  padding:14px max(16px,env(safe-area-inset-right,0px)) calc(14px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px));
-  max-height:52%;overflow-y:auto;display:flex;flex-direction:column;gap:12px}
+  padding:8px max(16px,env(safe-area-inset-right,0px)) calc(12px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px));
+  max-height:62%;overflow-y:auto;display:flex;flex-direction:column;gap:10px}
 @media (min-width:820px){
   #app{flex-direction:row-reverse}
-  #panel{width:360px;max-height:none;border-top:0;border-right:1px solid var(--line)}
+  #panel{width:380px;max-height:none;border-top:0;border-right:1px solid var(--line);padding-top:14px}
+  #grab{display:none}
 }
-h1{font-family:var(--display);font-size:20px;margin:0;letter-spacing:-.01em}
+#grab{align-self:center;width:100%;border:0;background:transparent;padding:2px 0 4px;cursor:pointer;color:var(--muted);font-size:12px;display:flex;flex-direction:column;align-items:center;gap:2px}
+#grab::before{content:"";width:40px;height:4px;border-radius:2px;background:var(--line)}
+.collapsed .controls{display:none}
+.running .controls,.running .results,.running #grab{display:none}
+h1{font-family:var(--display);font-size:19px;margin:0;letter-spacing:-.01em}
 h1 small{font-family:var(--body);font-weight:400;font-size:12px;color:var(--muted);margin-left:6px}
+.controls{display:flex;flex-direction:column;gap:10px}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .label{font-size:12px;color:var(--muted);letter-spacing:.04em}
 .chip{border:1px solid var(--line);background:transparent;color:var(--fg);border-radius:999px;
-  padding:7px 13px;font:600 14px var(--display);cursor:pointer}
+  padding:6px 12px;font:600 14px var(--display);cursor:pointer}
 .chip[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--accent-fg)}
-input[type=number],input[type=text]{width:76px;padding:7px 8px;border:1px solid var(--line);border-radius:8px;
+input[type=number],input[type=text]{width:70px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;
   background:var(--bg);color:var(--fg);font:600 14px var(--display)}
-.btn{border:0;border-radius:10px;padding:11px 14px;font:700 15px var(--body);cursor:pointer}
-.btn.primary{background:var(--accent);color:var(--accent-fg);flex:1}
-.btn.ghost{background:transparent;color:var(--fg);border:1px solid var(--line)}
+label.check{display:flex;align-items:center;gap:6px;font-size:14px;cursor:pointer}
+label.check input{width:18px;height:18px;accent-color:var(--accent)}
+.btn{border:0;border-radius:10px;padding:10px 14px;font:700 15px var(--body);cursor:pointer;background:transparent;color:var(--fg)}
+.btn.primary{background:var(--accent);color:var(--accent-fg)}
+.btn.ghost{border:1px solid var(--line)}
+.btn.small{padding:7px 10px;font-size:13px}
 .btn:disabled{opacity:.5;cursor:wait}
+.grow{flex:1}
 button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-#status{font-size:13px;color:var(--muted);min-height:1.2em}
-#status.err{color:#c92a2a}
-#cands{display:flex;flex-direction:column;gap:8px}
-.cand{display:grid;grid-template-columns:14px 1fr auto;gap:10px;align-items:center;
-  border:1px solid var(--line);border-radius:10px;padding:10px 12px;cursor:pointer;background:transparent;color:var(--fg);text-align:left;font:inherit}
+#status{font-size:13px;color:var(--muted);min-height:1.2em;line-height:1.45}
+#status.err{color:var(--warn)}
+.results{display:flex;flex-direction:column;gap:8px}
+#cands{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+.cand{display:flex;flex-direction:column;gap:3px;border:2px solid var(--line);border-radius:10px;padding:8px;cursor:pointer;
+  background:transparent;color:var(--fg);text-align:left;font:inherit;min-width:0}
 .cand[aria-pressed="true"]{border-color:var(--fg)}
-.dot{width:14px;height:14px;border-radius:50%}
-.cand b{font:700 18px var(--display);font-variant-numeric:tabular-nums}
-.cand .sub{font-size:12px;color:var(--muted)}
-.gpx{font-size:13px;padding:7px 10px}
-.hint{font-size:12px;color:var(--muted);line-height:1.5}
+.cand .top{display:flex;align-items:center;gap:6px}
+.dot{width:10px;height:10px;border-radius:50%;flex:none}
+.cand b{font:700 17px var(--display);font-variant-numeric:tabular-nums}
+.cand .sub{font-size:11px;color:var(--muted);line-height:1.35}
+.badge{display:inline-block;font-size:11px;font-weight:700;border-radius:6px;padding:2px 6px;width:fit-content}
+.badge.ok{background:var(--okbg);color:var(--ok)}
+.badge.warn{background:var(--warnbg);color:var(--warn)}
+.badge.unk{background:var(--line);color:var(--muted)}
+#detail{font-size:13px;color:var(--muted);line-height:1.5}
+.hint{font-size:12px;color:var(--muted);line-height:1.5;margin:0}
+/* 달리기 계기판 */
+#hud{position:absolute;z-index:1000;left:max(10px,env(safe-area-inset-left,0px));right:max(10px,env(safe-area-inset-right,0px));top:calc(10px + env(safe-area-inset-top,0px));
+  background:var(--panel);color:var(--fg);border-radius:14px;padding:10px 14px;box-shadow:0 4px 18px rgba(0,0,0,.18);display:flex;flex-direction:column;gap:6px}
+#hud .big{font:700 34px var(--display);font-variant-numeric:tabular-nums;line-height:1}
+#hud .big small{font-size:15px;font-weight:500;color:var(--muted);margin-left:4px}
+#hud .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;font-variant-numeric:tabular-nums}
+#hud .stats div{display:flex;flex-direction:column}
+#hud .stats span{font-size:11px;color:var(--muted)}
+#hud .stats strong{font:700 17px var(--display)}
+#hudMsg{font-size:13px;font-weight:700}
+#hudMsg.off{color:var(--warn)}
+#hudMsg.on{color:var(--ok)}
+#followBtn{position:absolute;z-index:1000;right:max(10px,env(safe-area-inset-right,0px));bottom:16px}
+.arrow{color:#fff;font-size:12px;line-height:12px;text-shadow:0 0 2px #000,0 0 2px #000}
+.me{width:16px;height:16px;border-radius:50%;background:#1c7ed6;border:3px solid #fff;box-shadow:0 0 0 2px rgba(28,126,214,.35)}
 </style>
 </head>
 <body>
 <div id="app">
-  <div id="map" aria-label="지도"></div>
-  <div id="panel">
-    <h1>한바퀴 코스<small>출발점으로 돌아오는 순환 코스</small></h1>
+  <div id="mapWrap">
+    <div id="map" aria-label="지도"></div>
+    <div id="hud" hidden>
+      <div class="row" style="justify-content:space-between">
+        <div class="big" id="hudRemain">0.00<small>km 남음</small></div>
+        <button class="btn ghost small" id="stopBtn" type="button">■ 그만</button>
+      </div>
+      <div class="stats">
+        <div><span>달린 거리</span><strong id="hudDone">0.00 km</strong></div>
+        <div><span>시간</span><strong id="hudTime">0:00</strong></div>
+        <div><span>평균 페이스</span><strong id="hudPace">-</strong></div>
+      </div>
+      <div id="hudMsg">위치 찾는 중…</div>
+    </div>
+    <button class="btn primary small" id="followBtn" type="button" hidden>◎ 내 위치 따라가기</button>
+  </div>
 
-    <div class="row">
-      <button class="btn ghost" id="locBtn" type="button">📍 내 위치</button>
-      <span class="hint">또는 지도를 눌러 출발점을 정하세요</span>
+  <div id="panel">
+    <button id="grab" type="button" aria-expanded="true" aria-controls="controls"><span id="grabTxt">설정 접기</span></button>
+    <h1>한바퀴 코스<small>횡단보도 없는 순환 코스 찾기</small></h1>
+
+    <div class="controls" id="controls">
+      <div class="row">
+        <button class="btn ghost small" id="locBtn" type="button">📍 내 위치</button>
+        <span class="hint">또는 지도를 눌러 출발점을 정하세요</span>
+      </div>
+      <div class="row" id="distChips">
+        <span class="label">거리</span>
+        <button class="chip" type="button" data-km="3">3</button>
+        <button class="chip" type="button" data-km="5">5</button>
+        <button class="chip" type="button" data-km="7">7</button>
+        <button class="chip" type="button" data-km="10">10</button>
+        <input type="number" id="kmInput" min="1" max="21" step="0.5" value="5" aria-label="거리 직접 입력(km)"> km
+      </div>
+      <div class="row">
+        <span class="label">페이스</span>
+        <input type="text" id="paceInput" value="6:00" aria-label="페이스(분:초 / km)"> /km
+      </div>
+      <div class="row">
+        <label class="check"><input type="checkbox" id="prefPark" checked> 공원·녹지 우선</label>
+        <label class="check"><input type="checkbox" id="prefBig" checked> 큰길 옆 피하기</label>
+      </div>
+      <button class="btn primary" id="goBtn" type="button">코스 찾기</button>
     </div>
 
-    <div>
-      <div class="label">거리</div>
-      <div class="row" id="distChips" style="margin-top:6px">
-        <button class="chip" type="button" data-km="3">3km</button>
-        <button class="chip" type="button" data-km="5" aria-pressed="true">5km</button>
-        <button class="chip" type="button" data-km="7">7km</button>
-        <button class="chip" type="button" data-km="10">10km</button>
-        <input type="number" id="kmInput" min="1" max="30" step="0.5" value="5" aria-label="거리 직접 입력(km)"> km
+    <div id="status"></div>
+
+    <div class="results" id="results" hidden>
+      <div id="cands"></div>
+      <div id="detail"></div>
+      <div class="row">
+        <button class="btn ghost small" id="revBtn" type="button">⇄ 방향 바꾸기</button>
+        <button class="btn ghost small" id="gpxBtn" type="button">GPX 저장</button>
+        <button class="btn primary small grow" id="runBtn" type="button">▶ 달리기 시작</button>
       </div>
     </div>
-
-    <div class="row">
-      <span class="label">페이스</span>
-      <input type="text" id="paceInput" value="6:00" aria-label="페이스(분:초 / km)"> /km
-    </div>
-
-    <div class="row">
-      <button class="btn primary" id="goBtn" type="button">코스 3개 만들기</button>
-    </div>
-    <div id="status"></div>
-    <div id="cands"></div>
-    <p class="hint">길 데이터: OpenStreetMap 보행자 경로. 실제 통행 가능 여부(공사, 사유지, 야간 안전)는 직접 확인하세요.</p>
+    <p class="hint">길·횡단보도 정보: OpenStreetMap. 지도에 등록 안 된 횡단보도는 못 찾을 수 있으니, 처음 가는 코스는 직접 확인하세요.</p>
   </div>
 </div>
 
 <script>
+'use strict';
 const OSRM = 'https://routing.openstreetmap.de/routed-foot/route/v1/foot/';
-const COLORS = ['--c1','--c2','--c3'].map(v => getComputedStyle(document.documentElement).getPropertyValue(v).trim());
-const R = 6371; // km
-const toRad = d => d * Math.PI / 180, toDeg = r => r * 180 / Math.PI;
+const OVERPASS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter'
+];
+const $ = id => document.getElementById(id);
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const COLORS = ['--c1','--c2','--c3'].map(css);
+const D2R = Math.PI / 180;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch { return false; } },
+  keys() { try { return Object.keys(localStorage); } catch { return []; } },
+  del(k) { try { localStorage.removeItem(k); } catch {} }
+};
+
+// ---------- 평면 좌표 (출발점 기준 미터) ----------
+let P0 = null;
+function setProj(lat, lon) { P0 = { lat, lon, kx: 111320 * Math.cos(lat * D2R), ky: 110540 }; }
+const xy = (lat, lon) => [(lon - P0.lon) * P0.kx, (lat - P0.lat) * P0.ky];
+const ll = (x, y) => [P0.lat + y / P0.ky, P0.lon + x / P0.kx];
+const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+const inBB = (p, bb, m) => p[0] >= bb[0] - m && p[0] <= bb[2] + m && p[1] >= bb[1] - m && p[1] <= bb[3] + m;
+const bbOf = pts => { const bb = [1e18, 1e18, -1e18, -1e18]; for (const p of pts) { if (p[0] < bb[0]) bb[0] = p[0]; if (p[1] < bb[1]) bb[1] = p[1]; if (p[0] > bb[2]) bb[2] = p[0]; if (p[1] > bb[3]) bb[3] = p[1]; } return bb; };
+const bbHit = (a, b, m) => a[0] - m <= b[2] && b[0] - m <= a[2] && a[1] - m <= b[3] && b[1] - m <= a[3];
 
 // ---------- 지도 ----------
-const map = L.map('map', {zoomControl:true}).setView([37.5283, 126.9326], 14); // 여의도 한강공원 (예시 출발점)
-L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  maxZoom: 19,
-  attribution: '&copy; OpenStreetMap contributors'
-}).addTo(map);
+const saved = store.get('rc:settings', {});
+let start = saved.start || [37.5283, 126.9326]; // 처음엔 여의도 한강공원 (예시)
+const map = L.map('map', { zoomControl: true }).setView(start, 14);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap contributors' }).addTo(map);
+const startMarker = L.marker(start, { draggable: true, title: '출발점' }).addTo(map)
+  .bindTooltip('출발', { permanent: true, direction: 'top', offset: [-15, -12] });
+function setStart(p, pan) {
+  start = p; startMarker.setLatLng(p); if (pan) map.setView(p, 15);
+  saveSettings(); schedulePrefetch();
+}
+startMarker.on('dragend', e => { const p = e.target.getLatLng(); setStart([p.lat, p.lng]); });
+map.on('click', e => { if (!run) setStart([e.latlng.lat, e.latlng.lng]); });
 
-let start = [37.5283, 126.9326];
-const startMarker = L.marker(start, {draggable:true, title:'출발점'}).addTo(map).bindTooltip('출발', {permanent:true, direction:'top', offset:[-15,-12]});
-startMarker.on('dragend', e => { const p = e.target.getLatLng(); start = [p.lat, p.lng]; });
-map.on('click', e => { start = [e.latlng.lat, e.latlng.lng]; startMarker.setLatLng(e.latlng); });
+// ---------- 상태 표시 ----------
+const status = (msg, err) => { $('status').textContent = msg; $('status').className = err ? 'err' : ''; };
 
-let layers = [], cands = [], selected = 0;
+// ---------- 설정 ----------
+function setKm(v) {
+  $('kmInput').value = v;
+  document.querySelectorAll('#distChips .chip').forEach(x => x.setAttribute('aria-pressed', x.dataset.km === String(v)));
+}
+document.querySelectorAll('#distChips .chip').forEach(b => b.onclick = () => { setKm(b.dataset.km); saveSettings(); schedulePrefetch(); });
+$('kmInput').oninput = () => { setKm($('kmInput').value); saveSettings(); schedulePrefetch(); };
+['paceInput', 'prefPark', 'prefBig'].forEach(id => $(id).onchange = () => { saveSettings(); if (cands.length) { rank(); draw(); } });
+function saveSettings() {
+  store.set('rc:settings', { start, km: $('kmInput').value, pace: $('paceInput').value, park: $('prefPark').checked, big: $('prefBig').checked });
+}
+setKm(saved.km || '5');
+if (saved.pace) $('paceInput').value = saved.pace;
+if (saved.park === false) $('prefPark').checked = false;
+if (saved.big === false) $('prefBig').checked = false;
+function parsePace() { const m = /^(\d{1,2}):(\d{2})$/.exec($('paceInput').value.trim()); return m ? +m[1] + +m[2] / 60 : 6; }
+function fmtMin(min) { const h = Math.floor(min / 60), m = Math.round(min % 60); return h ? `${h}시간 ${m}분` : `${m}분`; }
+
+// 조작판 접기
+function setCollapsed(c) {
+  $('panel').classList.toggle('collapsed', c);
+  $('grab').setAttribute('aria-expanded', !c);
+  $('grabTxt').textContent = c ? '설정 펼치기' : '설정 접기';
+  refit();
+}
+function refit() { // 화면 크기가 바뀐 뒤 지도를 코스에 맞춤
+  setTimeout(() => { map.invalidateSize(); if (!run && cands[selected] && layers.length) map.fitBounds(L.polyline(cands[selected].coords).getBounds(), { padding: [30, 30] }); }, 250);
+}
+$('grab').onclick = () => setCollapsed(!$('panel').classList.contains('collapsed'));
 
 // ---------- 내 위치 ----------
-const $ = id => document.getElementById(id);
-const status = (msg, err) => { $('status').textContent = msg; $('status').className = err ? 'err' : ''; };
 $('locBtn').onclick = () => {
   if (!navigator.geolocation) return status('이 브라우저는 위치를 지원하지 않아요. 지도를 눌러 주세요.', true);
   status('위치 찾는 중…');
   navigator.geolocation.getCurrentPosition(
-    p => { start = [p.coords.latitude, p.coords.longitude]; startMarker.setLatLng(start); map.setView(start, 15); status('내 위치를 출발점으로 정했어요.'); },
+    p => { setStart([p.coords.latitude, p.coords.longitude], true); status('내 위치를 출발점으로 정했어요.'); },
     e => status('위치를 못 가져왔어요(' + e.message + '). 지도를 눌러 출발점을 정하세요.', true),
-    {enableHighAccuracy:true, timeout:10000}
+    { enableHighAccuracy: true, timeout: 10000 }
   );
 };
 
-// ---------- 거리 선택 ----------
-document.querySelectorAll('#distChips .chip').forEach(b => b.onclick = () => {
-  document.querySelectorAll('#distChips .chip').forEach(x => x.setAttribute('aria-pressed', x === b));
-  $('kmInput').value = b.dataset.km;
-});
-$('kmInput').oninput = () => document.querySelectorAll('#distChips .chip')
-  .forEach(x => x.setAttribute('aria-pressed', x.dataset.km === $('kmInput').value));
-
-// ---------- 계산 ----------
-// 기준점에서 bearing(북=0, 동=π/2) 방향으로 km만큼 떨어진 점 (짧은 거리 근사)
-function offset([lat, lon], km, b) {
-  return [lat + toDeg(km / R * Math.cos(b)), lon + toDeg(km / R * Math.sin(b) / Math.cos(toRad(lat)))];
+// ---------- 길찾기 (보행자: Valhalla 먼저, 안 되면 OSRM) ----------
+const VALHALLA = 'https://valhalla1.openstreetmap.de/route?json=';
+const deadUntil = { valhalla: 0, osrm: 0 }; // 응답 없는 서버는 5분 동안 건너뜀
+async function fetchJson(url, ms) {
+  const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), ms);
+  try {
+    const res = await fetch(url, { signal: ctl.signal });
+    const j = await res.json().catch(() => null);
+    if (!res.ok) { const e = new Error('응답 ' + res.status + (j?.error ? ' ' + j.error : '')); e.status = res.status; e.body = j; throw e; }
+    return j;
+  } catch (e) { if (e.name === 'AbortError') { const x = new Error('응답 없음'); x.timeout = true; throw x; } throw e; }
+  finally { clearTimeout(tm); }
 }
-function haversine([a1, o1], [a2, o2]) {
-  const dA = toRad(a2 - a1), dO = toRad(o2 - o1);
-  const h = Math.sin(dA/2)**2 + Math.cos(toRad(a1)) * Math.cos(toRad(a2)) * Math.sin(dO/2)**2;
-  return 2 * R * Math.asin(Math.sqrt(h));
+function decode6(str) {
+  let i = 0, lat = 0, lon = 0; const out = [];
+  while (i < str.length) {
+    for (const k of [0, 1]) { let b, s = 0, r = 0; do { b = str.charCodeAt(i++) - 63; r |= (b & 31) << s; s += 5; } while (b >= 32); const d = (r & 1) ? ~(r >> 1) : (r >> 1); if (k) lon += d; else lat += d; }
+    out.push([lat / 1e6, lon / 1e6]);
+  }
+  return out;
 }
-// 출발점이 원 위에 오도록 원 중심을 theta 방향으로 r만큼 옮기고, 원 위 3점을 경유
-function loopPoints(s, r, theta) {
-  const c = offset(s, r, theta), pts = [s];
-  for (let i = 1; i <= 3; i++) pts.push(offset(c, r, theta + Math.PI + i * Math.PI / 2));
-  pts.push(s);
-  return pts;
+let valhallaNext = 0; // 공개 서버 예절: 요청 사이 1.1초 간격
+async function viaValhalla(pts) {
+  const body = { costing: 'pedestrian', directions_type: 'none', units: 'kilometers',
+    locations: pts.map((p, i) => ({ lat: +p[0].toFixed(6), lon: +p[1].toFixed(6), type: i === 0 || i === pts.length - 1 ? 'break' : 'through' })) };
+  let j;
+  for (let tryNo = 0; ; tryNo++) {
+    const wait = valhallaNext - Date.now(); valhallaNext = Math.max(Date.now(), valhallaNext) + 1100;
+    if (wait > 0) await sleep(wait);
+    try { j = await fetchJson(VALHALLA + encodeURIComponent(JSON.stringify(body)), 20000); break; }
+    catch (e) { if (e.status === 429 && tryNo < 3) { valhallaNext = Date.now() + 2500; continue; } throw e; }
+  }
+  const coords = [];
+  for (const leg of j.trip.legs) { const c = decode6(leg.shape); coords.push(...(coords.length ? c.slice(1) : c)); }
+  return { m: j.trip.summary.length * 1000, coords };
 }
-async function route(pts) {
+async function viaOsrm(pts) {
   const q = pts.map(p => p[1].toFixed(6) + ',' + p[0].toFixed(6)).join(';');
-  const res = await fetch(OSRM + q + '?overview=full&geometries=geojson');
-  if (!res.ok) throw new Error('경로 서버 응답 ' + res.status);
-  const j = await res.json();
-  if (j.code !== 'Ok' || !j.routes?.length) throw new Error('경로를 못 찾았어요 (' + (j.message || j.code) + ')');
-  return { km: j.routes[0].distance / 1000, coords: j.routes[0].geometry.coordinates.map(c => [c[1], c[0]]) };
+  const j = await fetchJson(OSRM + q + '?overview=full&geometries=geojson', 20000);
+  if (j.code !== 'Ok' || !j.routes?.length) throw new Error('경로 없음 (' + (j.message || j.code) + ')');
+  return { m: j.routes[0].distance, coords: j.routes[0].geometry.coordinates.map(c => [c[1], c[0]]) };
 }
-// 같은 길을 되밟는 비율 (앞에서 지나간 점과 15m 이내로 다시 붙는 점의 비율)
-function overlapRatio(coords) {
-  const pts = []; // 약 20m 간격으로 다시 샘플
-  for (let i = 0; i < coords.length - 1; i++) {
-    const a = coords[i], b = coords[i+1], d = haversine(a, b), n = Math.max(1, Math.ceil(d / 0.02));
-    for (let k = 0; k < n; k++) pts.push([a[0] + (b[0]-a[0]) * k / n, a[1] + (b[1]-a[1]) * k / n]);
+async function osrm(pts) {
+  let lastErr;
+  for (let round = 0; round < 2; round++) {
+    for (const [name, fn] of [['valhalla', viaValhalla], ['osrm', viaOsrm]]) {
+      if (Date.now() < deadUntil[name]) continue;
+      try { return await fn(pts); }
+      catch (e) {
+        lastErr = e;
+        if (e.status === 400) throw new Error('이 위치에선 길을 못 찾았어요'); // 갈 수 없는 지점(강 한가운데 등)
+        if (e.timeout || !e.status || e.status >= 500) deadUntil[name] = Date.now() + 300000;
+        if (e.status === 429) await sleep(1500);
+      }
+    }
+    if (round === 0 && deadUntil.valhalla > Date.now() && deadUntil.osrm > Date.now()) { deadUntil.valhalla = deadUntil.osrm = 0; await sleep(1500); }
   }
+  throw lastErr || new Error('길찾기 서버 연결 실패');
+}
+
+// ---------- OSM 횡단보도·큰길·공원 데이터 (구역별로 휴대폰에 저장) ----------
+const TY = 0.02, TX = 0.025, TILE_TTL = 30 * 864e5, TILE_VER = 'rc:t1:';
+const BIG = /^(motorway|trunk|primary|secondary|tertiary)(_link)?$/;
+const FOOT = /^(footway|path|pedestrian|steps|cycleway|crossing|corridor|bridleway|elevator|platform)$/;
+const tileKey = (ty, tx) => TILE_VER + ty + ':' + tx;
+function tilesFor(bbLL) { // [s,w,n,e]
+  const out = [];
+  for (let ty = Math.floor(bbLL[0] / TY); ty <= Math.floor(bbLL[2] / TY); ty++)
+    for (let tx = Math.floor(bbLL[1] / TX); tx <= Math.floor(bbLL[3] / TX); tx++) out.push([ty, tx]);
+  return out;
+}
+function areaBB(s, Dm) { // 출발점 주변, 코스가 닿을 수 있는 범위
+  const h = Dm / 2.3 + 300;
+  return [s[0] - h / 110540, s[1] - h / (111320 * Math.cos(s[0] * D2R)), s[0] + h / 110540, s[1] + h / (111320 * Math.cos(s[0] * D2R))];
+}
+async function overpass(q, onTry) {
+  let lastErr;
+  for (let round = 0; round < 2; round++) {
+    for (const url of OVERPASS) {
+      onTry?.(url);
+      const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 70000);
+      try {
+        const res = await fetch(url, { method: 'POST', body: 'data=' + encodeURIComponent(q), headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, signal: ctl.signal });
+        if (!res.ok) throw new Error('응답 ' + res.status);
+        const j = await res.json();
+        if (j.remark && /runtime error|timed out/i.test(j.remark)) throw new Error(j.remark);
+        return j;
+      } catch (e) { lastErr = e; } finally { clearTimeout(tm); }
+    }
+    await sleep(3000);
+  }
+  throw lastErr || new Error('지도 데이터 서버 연결 실패');
+}
+function parseOverpass(j) {
+  const r6 = v => Math.round(v * 1e6) / 1e6;
+  const crNodes = [], roads = [], gs = [], pk = [], wayIdx = new Map();
+  for (const e of j.elements) {
+    if (e.type === 'node') { crNodes.push(e); continue; }
+    if (e.type !== 'way' || !e.geometry || e.geometry.length < 2 || e.geometry.some(p => !p)) continue;
+    const t = e.tags || {}, hw = t.highway, g = e.geometry.map(p => [r6(p.lat), r6(p.lon)]);
+    const sep = (t.bridge && t.bridge !== 'no') || (t.tunnel && t.tunnel !== 'no');
+    if (hw && sep) gs.push({ id: e.id, g });
+    if (hw && BIG.test(hw) && !sep) roads.push({ id: e.id, k: t.name || t.ref || ('w' + e.id), g });
+    if (t.leisure || t.landuse || t.natural) pk.push({ id: e.id, g });
+    if (hw && !FOOT.test(hw) && e.nodes) e.nodes.forEach((nid, i) => { if (!wayIdx.has(nid)) wayIdx.set(nid, { g, i }); });
+  }
+  const cr = crNodes.map(n => {
+    const h = wayIdx.get(n.id); let b = null;
+    if (h) { const a = h.g[Math.max(0, h.i - 1)], c = h.g[Math.min(h.g.length - 1, h.i + 1)];
+      b = Math.round(Math.atan2((c[1] - a[1]) * Math.cos(n.lat * D2R), c[0] - a[0]) * 1000) / 1000; }
+    return { id: n.id, lat: r6(n.lat), lon: r6(n.lon), b };
+  });
+  return { cr, roads, gs, pk };
+}
+function elBB(el) { if (el.lat != null) return [el.lat, el.lon, el.lat, el.lon];
+  let s = 90, w = 180, n = -90, e = -180; for (const p of el.g) { if (p[0] < s) s = p[0]; if (p[0] > n) n = p[0]; if (p[1] < w) w = p[1]; if (p[1] > e) e = p[1]; } return [s, w, n, e]; }
+let osmJob = null, osmJobKey = '';
+async function loadOsm(bbLL, onMsg) {
+  const tiles = tilesFor(bbLL), now = Date.now(), have = {}, missing = [];
+  for (const [ty, tx] of tiles) { const t = store.get(tileKey(ty, tx)); if (t && now - t.ts < TILE_TTL) have[ty + ':' + tx] = t; else missing.push([ty, tx]); }
+  if (missing.length) {
+    const s = Math.min(...missing.map(m => m[0])) * TY, w = Math.min(...missing.map(m => m[1])) * TX;
+    const n = (Math.max(...missing.map(m => m[0])) + 1) * TY, e = (Math.max(...missing.map(m => m[1])) + 1) * TX;
+    const B = [s, w, n, e].map(v => v.toFixed(5)).join(',');
+    const q = `[out:json][timeout:60][bbox:${B}];
+(node["highway"="crossing"];node["highway"="traffic_signals"]["crossing"];node["railway"="crossing"];)->.cr;
+way(bn.cr)["highway"]->.crw;
+way["highway"~"^(motorway|trunk|primary|secondary|tertiary)(_link)?$"]->.big;
+way["highway"]["bridge"]["bridge"!="no"]->.br;
+way["highway"]["tunnel"]["tunnel"!="no"]->.tu;
+(way["leisure"~"^(park|garden|nature_reserve|recreation_ground)$"];way["landuse"~"^(forest|grass|recreation_ground)$"];way["natural"~"^(wood|water)$"];)->.pk;
+(.cr;.crw;.big;.br;.tu;.pk;);out geom qt;`;
+    onMsg?.(`횡단보도·큰길 정보 받는 중… (처음 한 번은 30초쯤 걸릴 수 있어요)`);
+    const data = parseOverpass(await overpass(q));
+    const fresh = {};
+    for (const [ty, tx] of missing) fresh[ty + ':' + tx] = { ts: now, cr: [], roads: [], gs: [], pk: [] };
+    for (const kind of ['cr', 'roads', 'gs', 'pk']) for (const el of data[kind]) {
+      const b = elBB(el);
+      for (const [ty, tx] of missing) {
+        const ts = ty * TY, tw = tx * TX;
+        if (b[0] <= ts + TY && b[2] >= ts && b[1] <= tw + TX && b[3] >= tw) fresh[ty + ':' + tx][kind].push(el);
+      }
+    }
+    for (const [ty, tx] of missing) {
+      const k = ty + ':' + tx; have[k] = fresh[k];
+      if (!store.set(tileKey(ty, tx), fresh[k])) { // 저장 공간 부족하면 오래된 구역부터 지움
+        const old = store.keys().filter(x => x.startsWith('rc:t')).map(x => [x, store.get(x, {}).ts || 0]).sort((a, b) => a[1] - b[1]);
+        old.slice(0, Math.ceil(old.length / 2)).forEach(x => store.del(x[0]));
+        store.set(tileKey(ty, tx), fresh[k]);
+      }
+    }
+  }
+  const merged = { cr: new Map(), roads: new Map(), gs: new Map(), pk: new Map() };
+  for (const t of Object.values(have)) for (const kind of ['cr', 'roads', 'gs', 'pk']) for (const el of t[kind]) merged[kind].set(el.id, el);
+  return { cr: [...merged.cr.values()], roads: [...merged.roads.values()], gs: [...merged.gs.values()], pk: [...merged.pk.values()] };
+}
+function getOsm(s, Dm, onMsg) {
+  const bb = areaBB(s, Dm), key = bb.map(v => v.toFixed(3)).join(',');
+  if (osmJob && osmJobKey === key) return osmJob;
+  osmJobKey = key;
+  osmJob = loadOsm(bb, onMsg).catch(e => { osmJob = null; osmJobKey = ''; throw e; });
+  return osmJob;
+}
+let prefetchTimer = null;
+function schedulePrefetch() { // 출발점·거리를 정하면 미리 받아 둠
+  clearTimeout(prefetchTimer);
+  prefetchTimer = setTimeout(() => { const D = parseFloat($('kmInput').value) * 1000; if (D > 0) getOsm(start, D).catch(() => {}); }, 1500);
+}
+
+// ---------- 분석용 구조 ----------
+function buildCtx(osm) {
+  if (!osm) return null;
+  const ctx = { cr: [], groups: [], gs: [], parks: [], big: [] };
+  for (const c of osm.cr) ctx.cr.push({ p: xy(c.lat, c.lon), u: c.b == null ? null : [Math.sin(c.b), Math.cos(c.b)] });
+  const seg = (a, b) => { const dx = b[0] - a[0], dy = b[1] - a[1], len = Math.hypot(dx, dy); return len < 0.5 ? null : { a, b, ux: dx / len, uy: dy / len, len, bb: bbOf([a, b]) }; };
+  // 큰길: 같은 이름끼리 묶고, 이어진 방향을 맞춤 (길 양쪽 구분용)
+  const byKey = new Map();
+  for (const r of osm.roads) { const pts = r.g.map(p => xy(p[0], p[1])); if (!byKey.has(r.k)) byKey.set(r.k, []); byKey.get(r.k).push({ pts, s: r.g[0].join(), e: r.g[r.g.length - 1].join() }); }
+  for (const ways of byKey.values()) {
+    const seen = new Set(), comps = [];
+    for (const w0 of ways) {
+      if (seen.has(w0)) continue;
+      const comp = [], queue = [[w0, false]]; seen.add(w0);
+      while (queue.length) {
+        const [w, rev] = queue.shift(); comp.push(rev ? w.pts.slice().reverse() : w.pts);
+        const ws = rev ? w.e : w.s, we = rev ? w.s : w.e;
+        for (const o of ways) { if (seen.has(o)) continue;
+          if (o.s === we || o.e === ws) { seen.add(o); queue.push([o, false]); }
+          else if (o.s === ws || o.e === we) { seen.add(o); queue.push([o, true]); } }
+      }
+      comps.push(comp);
+    }
+    const vec = comp => { let x = 0, y = 0; for (const pts of comp) { x += pts[pts.length - 1][0] - pts[0][0]; y += pts[pts.length - 1][1] - pts[0][1]; } return [x, y]; };
+    const ref = vec(comps[0]); const segs = [];
+    for (const comp of comps) {
+      const v = vec(comp), flip = v[0] * ref[0] + v[1] * ref[1] < 0;
+      for (let pts of comp) { if (flip) pts = pts.slice().reverse(); for (let i = 0; i < pts.length - 1; i++) { const s = seg(pts[i], pts[i + 1]); if (s) { segs.push(s); ctx.big.push(s); } } }
+    }
+    if (segs.length) ctx.groups.push({ segs, bb: bbOf(segs.flatMap(s => [s.a, s.b])) });
+  }
+  for (const w of osm.gs) { const pts = w.g.map(p => xy(p[0], p[1])); for (let i = 0; i < pts.length - 1; i++) { const s = seg(pts[i], pts[i + 1]); if (s) ctx.gs.push(s); } }
+  for (const w of osm.pk) { if (w.g.length < 4) continue; const pts = w.g.map(p => xy(p[0], p[1])); ctx.parks.push({ pts, bb: bbOf(pts) }); }
+  return ctx;
+}
+function segDist(p, s) { const dx = p[0] - s.a[0], dy = p[1] - s.a[1]; let t = dx * s.ux + dy * s.uy; t = Math.max(0, Math.min(s.len, t)); return Math.hypot(dx - s.ux * t, dy - s.uy * t); }
+function inPoly(p, pts) { let c = false; for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) { const a = pts[i], b = pts[j]; if ((a[1] > p[1]) !== (b[1] > p[1]) && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0]) c = !c; } return c; }
+function resample(coords, step = 10) {
+  const out = []; let prev = xy(coords[0][0], coords[0][1]), s = 0; out.push({ p: prev, s: 0 });
+  for (let i = 1; i < coords.length; i++) {
+    const q = xy(coords[i][0], coords[i][1]), d = dist(prev, q); if (d < 0.01) continue;
+    const n = Math.ceil(d / step);
+    for (let k = 1; k <= n; k++) { const t = k / n; out.push({ p: [prev[0] + (q[0] - prev[0]) * t, prev[1] + (q[1] - prev[1]) * t], s: s + d * t }); }
+    s += d; prev = q;
+  }
+  return out;
+}
+function analyze(coords, ctx) {
+  const R = resample(coords), n = R.length, total = R[n - 1].s, rbb = bbOf(R.map(r => r.p));
+  // 같은 길 되밟기
   let hit = 0;
-  for (let i = 0; i < pts.length; i++) {
-    for (let j = 0; j < i - 8; j++) if (haversine(pts[i], pts[j]) < 0.015) { hit++; break; }
-  }
-  return pts.length ? hit / pts.length : 0;
-}
-async function makeLoop(s, D, theta) {
-  let r = D / (4 * Math.SQRT2 * 1.3), best = null; // 정사각형 둘레 ≈ 5.66r, 도로 굴곡 1.3배 가정
-  for (let it = 0; it < 4; it++) {
-    const res = await route(loopPoints(s, r, theta));
-    if (!best || Math.abs(res.km - D) < Math.abs(best.km - D)) best = res;
-    if (Math.abs(res.km - D) / D < 0.06) break;
-    r *= D / res.km;
-    await sleep(300);
-  }
-  best.overlap = overlapRatio(best.coords);
-  return best;
-}
-
-function parsePace() {
-  const m = /^(\d{1,2}):(\d{2})$/.exec($('paceInput').value.trim());
-  return m ? +m[1] + +m[2] / 60 : 6;
-}
-function fmtTime(min) {
-  const h = Math.floor(min / 60), m = Math.round(min % 60);
-  return h ? `${h}시간 ${m}분` : `${m}분`;
-}
-
-function draw() {
-  layers.forEach(l => map.removeLayer(l)); layers = [];
-  cands.forEach((c, i) => {
-    if (i === selected) return;
-    layers.push(L.polyline(c.coords, {color: COLORS[i], weight: 4, opacity: .35}).addTo(map));
-  });
-  const c = cands[selected];
-  if (c) {
-    const line = L.polyline(c.coords, {color: COLORS[selected], weight: 6, opacity: .95}).addTo(map);
-    layers.push(line);
-    map.fitBounds(line.getBounds(), {padding: [30, 30]});
-  }
-  const pace = parsePace();
-  $('cands').innerHTML = '';
-  cands.forEach((c, i) => {
-    const b = document.createElement('button');
-    b.type = 'button'; b.className = 'cand'; b.setAttribute('aria-pressed', i === selected);
-    b.innerHTML = `<span class="dot" style="background:${COLORS[i]}"></span>
-      <span><b>${c.km.toFixed(2)} km</b><br><span class="sub">약 ${fmtTime(c.km * pace)} · 겹치는 길 약 ${Math.round(c.overlap * 100)}%</span></span>
-      <span class="btn ghost gpx" role="button" tabindex="0" data-i="${i}">GPX</span>`;
-    b.onclick = e => {
-      if (e.target.classList.contains('gpx')) { saveGpx(i); return; }
-      selected = i; draw();
+  for (let i = 0; i < n; i += 2) for (let j = 0; j < i - 15; j += 2) if (Math.abs(R[i].p[0] - R[j].p[0]) < 12 && dist(R[i].p, R[j].p) < 12) { hit++; break; }
+  const overlap = hit / Math.ceil(n / 2);
+  if (!ctx) return { R, total, overlap, events: null, park: null, big: null };
+  const events = [];
+  // 1) 지도에 표시된 횡단보도를 가로질러 지나감
+  for (const c of ctx.cr) {
+    if (!inBB(c.p, rbb, 10)) continue;
+    let best = null, inPass = false;
+    const handle = b => {
+      const a = R[Math.max(0, b.i - 2)].p, z = R[Math.min(n - 1, b.i + 2)].p, vx = z[0] - a[0], vy = z[1] - a[1], L = Math.hypot(vx, vy) || 1;
+      const across = c.u ? Math.abs(vx * c.u[1] - vy * c.u[0]) / L > 0.5 : true; // 찻길과 엇갈리는 방향이면 건너는 것
+      if (across) events.push({ p: R[b.i].p, s: R[b.i].s, kind: '횡단보도' });
     };
-    $('cands').appendChild(b);
-  });
+    for (let i = 0; i < n; i++) {
+      const d = dist(R[i].p, c.p);
+      if (d < 8) { if (!best || d < best.d) best = { d, i }; inPass = true; }
+      else if (inPass && d > 25) { handle(best); best = null; inPass = false; }
+    }
+    if (best) handle(best);
+  }
+  // 2) 큰길의 한쪽에서 반대쪽으로 넘어감 (지하도·육교·다리 근처는 제외)
+  for (const g of ctx.groups) {
+    if (!bbHit(g.bb, rbb, 40)) continue;
+    let side = 0;
+    for (let i = 0; i < n; i++) {
+      const P = R[i].p;
+      if (!inBB(P, g.bb, 40)) { side = 0; continue; }
+      let best = null;
+      for (const s of g.segs) {
+        if (!inBB(P, s.bb, 40)) continue;
+        const dx = P[0] - s.a[0], dy = P[1] - s.a[1], t = dx * s.ux + dy * s.uy;
+        if (t < -3 || t > s.len + 3) continue;
+        const d = s.ux * dy - s.uy * dx;
+        if (best === null || Math.abs(d) < Math.abs(best)) best = d;
+      }
+      if (best === null || Math.abs(best) > 40) { side = 0; continue; }
+      if (Math.abs(best) >= 5) {
+        const sg = Math.sign(best);
+        if (side && sg !== side && !ctx.gs.some(s => inBB(P, s.bb, 25) && segDist(P, s) < 25)) events.push({ p: P, s: R[i].s, kind: '찻길' });
+        side = sg;
+      }
+    }
+  }
+  events.sort((a, b) => a.s - b.s);
+  const ev = [];
+  for (const e of events) if (!ev.some(x => dist(x.p, e.p) < 35)) ev.push(e);
+  // 공원·녹지 비율, 큰길 옆 비율
+  let inPark = 0, nearBig = 0, cnt = 0;
+  const parks = ctx.parks.filter(pk => bbHit(pk.bb, rbb, 0)), bigs = ctx.big.filter(s => bbHit(s.bb, rbb, 20));
+  for (let i = 0; i < n; i += 3) {
+    const P = R[i].p; cnt++;
+    if (parks.some(pk => inBB(P, pk.bb, 0) && inPoly(P, pk.pts))) inPark++;
+    if (bigs.some(s => inBB(P, s.bb, 18) && segDist(P, s) < 18)) nearBig++;
+  }
+  return { R, total, overlap, events: ev, park: inPark / cnt, big: nearBig / cnt };
 }
 
-function saveGpx(i) {
-  const c = cands[i];
-  const pts = c.coords.map(p => `<trkpt lat="${p[0].toFixed(6)}" lon="${p[1].toFixed(6)}"></trkpt>`).join('\n');
-  const gpx = `<?xml version="1.0" encoding="UTF-8"?>
-<gpx version="1.1" creator="한바퀴 코스" xmlns="http://www.topografix.com/GPX/1/1">
-<trk><name>순환 ${c.km.toFixed(1)}km</name><trkseg>
-${pts}
-</trkseg></trk></gpx>`;
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([gpx], {type: 'application/gpx+xml'}));
-  a.download = `loop-${c.km.toFixed(1)}km.gpx`;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+// ---------- 코스 후보 만들기 ----------
+function around(c, r, b) { return ll(c[0] + r * Math.sin(b), c[1] + r * Math.cos(b)); }
+let loopRatio = 1.3, obRatio = 1.25;
+async function fitLoop(D, theta) {
+  const S = [0, 0]; let r = D / (4 * Math.SQRT2 * loopRatio), best = null;
+  for (let it = 0; it < 3; it++) {
+    const c = [S[0] + r * Math.sin(theta), S[1] + r * Math.cos(theta)];
+    const pts = [start]; for (let i = 1; i <= 3; i++) pts.push(around(c, r, theta + Math.PI + i * Math.PI / 2)); pts.push(start);
+    const res = await osrm(pts);
+    loopRatio = 0.6 * loopRatio + 0.4 * (res.m / (4 * Math.SQRT2 * r));
+    if (!best || Math.abs(res.m - D) < Math.abs(best.m - D)) best = res;
+    if (Math.abs(res.m - D) / D < 0.1) break;
+    r *= D / res.m;
+  }
+  best.type = '순환'; return best;
+}
+async function fitOutBack(D, theta) {
+  let r = D / 2 / obRatio, best = null;
+  for (let it = 0; it < 2; it++) {
+    const res = await osrm([start, around([0, 0], r, theta), start]);
+    obRatio = 0.6 * obRatio + 0.4 * (res.m / 2 / r);
+    if (!best || Math.abs(res.m - D) < Math.abs(best.m - D)) best = res;
+    if (Math.abs(res.m - D) / D < 0.1) break;
+    r *= D / res.m;
+  }
+  best.type = '왕복'; return best;
+}
+async function pool(tasks, k, onDone) {
+  const out = []; let i = 0;
+  await Promise.all(Array.from({ length: k }, async () => { while (i < tasks.length) { const my = i++; try { out[my] = await tasks[my](); } catch (e) { out[my] = null; } onDone(); } }));
+  return out.filter(Boolean);
+}
+
+let all = [], cands = [], selected = 0, layers = [], routeStart = null;
+function similar(a, b) { // 같은 코스가 겹쳐 나오지 않게
+  let near = 0, tot = 0;
+  for (let i = 0; i < a.R.length; i += 6) { tot++; const p = a.R[i].p; if (b.R.some((q, j) => j % 3 === 0 && Math.abs(q.p[0] - p[0]) < 25 && dist(q.p, p) < 25)) near++; }
+  return near / tot > 0.7;
+}
+function score(c, D) {
+  const prefPark = $('prefPark').checked, prefBig = $('prefBig').checked;
+  let s = Math.abs(c.total - D) / D * 200 + (c.type === '왕복' ? 40 : c.overlap * 40);
+  if (c.events) s += c.events.length * 1000;
+  if (prefPark && c.park != null) s -= c.park * 60;
+  if (prefBig && c.big != null) s += c.big * 60;
+  return s;
+}
+let lastD = 5000;
+function rank() {
+  const sorted = all.slice().sort((a, b) => score(a, lastD) - score(b, lastD));
+  cands = [];
+  for (const c of sorted) { if (cands.length >= 3) break; if (!cands.some(x => similar(x, c))) cands.push(c); }
+  selected = 0;
 }
 
 $('goBtn').onclick = async () => {
-  const D = parseFloat($('kmInput').value);
-  if (!(D >= 1 && D <= 30)) return status('거리는 1~30km 사이로 넣어 주세요.', true);
-  $('goBtn').disabled = true;
-  cands = []; selected = 0; draw();
-  const base = Math.random() * 2 * Math.PI;
+  const D = parseFloat($('kmInput').value) * 1000;
+  if (!(D >= 1000 && D <= 21000)) return status('거리는 1~21km 사이로 넣어 주세요.', true);
+  lastD = D; saveSettings();
+  $('goBtn').disabled = true; $('results').hidden = true;
+  all = []; cands = []; draw();
+  setProj(start[0], start[1]); routeStart = start.slice();
+  let osmErr = null;
+  const osmP = getOsm(start, D, m => status(m)).catch(e => { osmErr = e; return null; });
+  const base = Math.random() * 2 * Math.PI, tasks = [];
+  for (let k = 0; k < 6; k++) tasks.push(() => fitLoop(D, base + k * Math.PI / 3));
+  for (let k = 0; k < 3; k++) tasks.push(() => fitOutBack(D, base + Math.PI / 6 + k * 2 * Math.PI / 3));
+  let done = 0;
   try {
-    for (let k = 0; k < 3; k++) {
-      status(`코스 ${k + 1}/3 계산 중…`);
-      cands.push(await makeLoop(start, D, base + k * 2 * Math.PI / 3));
-      draw();
-    }
-    status(`${D}km 코스 3개를 만들었어요. 눌러서 골라 보세요.`);
+    status('코스 후보 만드는 중… 0/' + tasks.length);
+    const routes = await pool(tasks, 2, () => status(`코스 후보 만드는 중… ${++done}/${tasks.length}`));
+    if (!routes.length) throw new Error('경로를 하나도 못 만들었어요');
+    status('횡단보도 확인 중…');
+    const osm = await osmP;
+    const ctx = buildCtx(osm);
+    all = routes.map(r => Object.assign(analyze(r.coords, ctx), { coords: r.coords, type: r.type, rev: false }));
+    // 요청 거리와 많이 다른 코스는 뺌 (20% 이내, 없으면 40% 이내)
+    const near = lim => all.filter(c => Math.abs(c.total - D) / D <= lim);
+    all = near(0.2).length ? near(0.2) : near(0.4).length ? near(0.4) : all;
+    rank(); draw();
+    $('results').hidden = false;
+    const b = cands[0];
+    if (!ctx) status('횡단보도 정보를 못 받아서 확인 안 된 코스예요. 잠시 뒤 다시 눌러 보세요. (' + (osmErr?.message || '') + ')', true);
+    else if (b.events.length === 0) status(`횡단보도 없는 코스를 찾았어요. 후보 ${all.length}개 중 골랐어요.`);
+    else status(`횡단보도가 하나도 없는 코스는 못 찾았어요. 가장 적은 코스(${b.events.length}번)를 보여 줘요. 공원이나 강변 쪽으로 출발점을 옮겨 보세요.`, true);
+    if (matchMedia('(max-width: 819px)').matches) setCollapsed(true);
   } catch (e) {
-    status('실패: ' + e.message + ' (인터넷 연결 또는 출발점 위치를 확인하세요)', true);
-  } finally {
-    $('goBtn').disabled = false;
-  }
+    status('실패: ' + e.message + ' (인터넷 연결이나 출발점 위치를 확인하세요)', true);
+  } finally { $('goBtn').disabled = false; }
 };
+
+// ---------- 그리기 ----------
+const oriented = c => c.rev ? c.coords.slice().reverse() : c.coords;
+function bearingDeg(a, b) { return Math.atan2((b[1] - a[1]) * Math.cos(a[0] * D2R), b[0] - a[0]) / D2R; }
+function draw() {
+  layers.forEach(l => map.removeLayer(l)); layers = [];
+  cands.forEach((c, i) => { if (i !== selected) layers.push(L.polyline(c.coords, { color: COLORS[i], weight: 4, opacity: .35 }).addTo(map)); });
+  const c = cands[selected];
+  $('cands').innerHTML = '';
+  if (!c) { $('detail').textContent = ''; return; }
+  const co = oriented(c);
+  const line = L.polyline(co, { color: COLORS[selected], weight: 6, opacity: .95 }).addTo(map);
+  layers.push(line);
+  // 진행 방향 화살표 (약 400m마다)
+  let acc = 0;
+  for (let i = 1; i < co.length; i++) {
+    acc += map.distance(co[i - 1], co[i]);
+    if (acc >= 400) { acc = 0; const deg = bearingDeg(co[i - 1], co[i]);
+      layers.push(L.marker(co[i], { interactive: false, icon: L.divIcon({ className: '', html: `<div class="arrow" style="transform:rotate(${deg}deg)">▲</div>`, iconSize: [12, 12], iconAnchor: [6, 6] }) }).addTo(map)); }
+  }
+  // 건너는 곳 표시
+  for (const e of c.events || []) layers.push(L.circleMarker(ll(e.p[0], e.p[1]), { radius: 8, color: '#c92a2a', weight: 3, fillColor: '#fff', fillOpacity: 1 }).bindTooltip(e.kind + ' 건넘').addTo(map));
+  if (!run) map.fitBounds(line.getBounds(), { padding: [30, 30] });
+  const pace = parsePace();
+  cands.forEach((c, i) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'cand'; b.setAttribute('aria-pressed', i === selected);
+    const badge = c.events == null ? '<span class="badge unk">확인 안 됨</span>'
+      : c.events.length ? `<span class="badge warn">건넘 ${c.events.length}번</span>` : '<span class="badge ok">횡단보도 없음</span>';
+    b.innerHTML = `<span class="top"><span class="dot" style="background:${COLORS[i]}"></span><b>${(c.total / 1000).toFixed(2)}</b><span class="sub">km</span></span>
+      ${badge}<span class="sub">${c.type} · 약 ${fmtMin(c.total / 1000 * pace)}</span>`;
+    b.onclick = () => { selected = i; draw(); };
+    $('cands').appendChild(b);
+  });
+  const pct = v => v == null ? '?' : Math.round(v * 100) + '%';
+  $('detail').textContent = `${c.type} 코스 · ${c.rev ? '반대 방향' : '기본 방향'} · 공원·녹지 ${pct(c.park)} · 큰길 옆 ${pct(c.big)} · 같은 길 되밟기 ${pct(c.overlap)}`;
+}
+$('revBtn').onclick = () => { const c = cands[selected]; if (!c) return; c.rev = !c.rev; draw(); };
+$('gpxBtn').onclick = () => {
+  const c = cands[selected]; if (!c) return;
+  const pts = oriented(c).map(p => `<trkpt lat="${p[0].toFixed(6)}" lon="${p[1].toFixed(6)}"></trkpt>`).join('\n');
+  const gpx = `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="한바퀴 코스" xmlns="http://www.topografix.com/GPX/1/1">\n<trk><name>${c.type} ${(c.total / 1000).toFixed(1)}km</name><trkseg>\n${pts}\n</trkseg></trk></gpx>`;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([gpx], { type: 'application/gpx+xml' }));
+  a.download = `course-${(c.total / 1000).toFixed(1)}km.gpx`; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+};
+
+// ---------- 달리기 모드 ----------
+let run = null, meMarker = null, accCircle = null, wakeLock = null;
+async function keepAwake() { try { wakeLock = await navigator.wakeLock?.request('screen'); } catch {} }
+document.addEventListener('visibilitychange', () => { if (run && document.visibilityState === 'visible') keepAwake(); });
+function fmtClock(sec) { const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = Math.floor(sec % 60); return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(s).padStart(2, '0'); }
+$('runBtn').onclick = () => {
+  const c = cands[selected]; if (!c) return;
+  if (!navigator.geolocation) return status('이 브라우저는 위치를 지원하지 않아요.', true);
+  const R = resample(oriented(c));
+  run = { R, total: R[R.length - 1].s, idx: 0, t0: Date.now(), done: 0, last: null, off: false, follow: true, finished: false };
+  run.watch = navigator.geolocation.watchPosition(onPos, e => setHudMsg('위치 오류: ' + e.message, 'off'), { enableHighAccuracy: true, maximumAge: 1000, timeout: 20000 });
+  run.timer = setInterval(updateHud, 1000);
+  keepAwake();
+  $('panel').classList.add('running'); $('hud').hidden = false; $('followBtn').hidden = true;
+  status('달리는 중이에요. 화면을 켜 둔 채로 달려 주세요.');
+  setTimeout(() => map.invalidateSize(), 50);
+  updateHud();
+};
+$('stopBtn').onclick = stopRun;
+function stopRun() {
+  if (!run) return;
+  navigator.geolocation.clearWatch(run.watch); clearInterval(run.timer);
+  const sec = (Date.now() - run.t0) / 1000;
+  status(`기록: ${(run.done / 1000).toFixed(2)}km · ${fmtClock(sec)}${run.done > 200 ? ' · 평균 ' + fmtClock(sec / (run.done / 1000)) + '/km' : ''}`);
+  run = null; try { wakeLock?.release(); } catch {} wakeLock = null;
+  $('panel').classList.remove('running'); $('hud').hidden = true; $('followBtn').hidden = true;
+  if (meMarker) { map.removeLayer(meMarker); map.removeLayer(accCircle); meMarker = accCircle = null; }
+  refit();
+}
+map.on('dragstart', () => { if (run) { run.follow = false; $('followBtn').hidden = false; } });
+$('followBtn').onclick = () => { if (run) { run.follow = true; $('followBtn').hidden = true; if (run.lastLL) map.setView(run.lastLL, 17); } };
+function setHudMsg(t, cls) { $('hudMsg').textContent = t; $('hudMsg').className = cls || ''; }
+function onPos(pos) {
+  if (!run) return;
+  const la = pos.coords.latitude, lo = pos.coords.longitude, acc = pos.coords.accuracy, P = xy(la, lo);
+  run.lastLL = [la, lo];
+  if (!meMarker) { meMarker = L.marker([la, lo], { interactive: false, icon: L.divIcon({ className: '', html: '<div class="me"></div>', iconSize: [22, 22], iconAnchor: [11, 11] }) }).addTo(map);
+    accCircle = L.circle([la, lo], { radius: acc, weight: 1, color: '#1c7ed6', fillOpacity: .08 }).addTo(map); }
+  meMarker.setLatLng([la, lo]); accCircle.setLatLng([la, lo]).setRadius(acc);
+  if (run.follow) map.setView([la, lo], Math.max(map.getZoom(), 17), { animate: true });
+  // 달린 거리 (정확도 좋은 위치만)
+  if (acc <= 30) { if (run.last) { const d = dist(run.last, P); if (d > 3 && d < 100) run.done += d; if (d > 3) run.last = P; } else run.last = P; }
+  // 코스 위 진행 위치: 지금 위치 근처(뒤 300m ~ 앞 1.5km)에서 가장 가까운 곳
+  const R = run.R, n = R.length, lo2 = Math.max(0, run.idx - 30), hi = Math.min(n - 1, run.idx + 150);
+  let bi = -1, bd = 1e9;
+  for (let i = lo2; i <= hi; i++) { const d = dist(R[i].p, P); if (d < bd) { bd = d; bi = i; } }
+  if (bd <= Math.max(35, acc)) {
+    if (bi > run.idx) run.idx = bi;
+    if (run.off) { run.off = false; }
+    setHudMsg(acc > 40 ? `코스 위 · 위치 정확도 낮음(${Math.round(acc)}m)` : '코스 위에서 달리는 중', 'on');
+  } else {
+    let gd = 1e9; for (let i = 0; i < n; i++) gd = Math.min(gd, dist(R[i].p, P));
+    if (!run.off) { run.off = true; try { navigator.vibrate?.([250, 120, 250]); } catch {} }
+    setHudMsg(`코스에서 ${Math.round(gd)}m 벗어났어요`, 'off');
+  }
+  if (!run.finished && run.total - R[run.idx].s < 40 && run.idx > n * 0.8) {
+    run.finished = true; try { navigator.vibrate?.([400, 150, 400, 150, 400]); } catch {}
+    setHudMsg('🎉 완주! ■ 그만을 눌러 기록을 확인하세요', 'on');
+  }
+  updateHud();
+}
+function updateHud() {
+  if (!run) return;
+  const sec = (Date.now() - run.t0) / 1000, remain = Math.max(0, run.total - run.R[run.idx].s);
+  $('hudRemain').innerHTML = `${(remain / 1000).toFixed(2)}<small>km 남음</small>`;
+  $('hudDone').textContent = (run.done / 1000).toFixed(2) + ' km';
+  $('hudTime').textContent = fmtClock(sec);
+  $('hudPace').textContent = run.done > 200 ? fmtClock(sec / (run.done / 1000)) : '-';
+}
+
+schedulePrefetch();
 </script>
 </body>
 </html>
