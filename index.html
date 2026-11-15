@@ -85,6 +85,12 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
 #hudMsg{font-size:13px;font-weight:700}
 #hudMsg.off{color:var(--warn)}
 #hudMsg.on{color:var(--ok)}
+#drawBar{position:absolute;z-index:1000;left:max(10px,env(safe-area-inset-left,0px));right:max(10px,env(safe-area-inset-right,0px));top:calc(10px + env(safe-area-inset-top,0px));
+  background:var(--panel);color:var(--fg);border-radius:14px;padding:10px 12px;box-shadow:0 4px 18px rgba(0,0,0,.18);display:flex;flex-direction:column;gap:8px;font-size:13px;line-height:1.45}
+#drawTxt b{font:700 16px var(--display)}
+.mychip{display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:999px;overflow:hidden}
+.mychip button{border:0;background:transparent;color:var(--fg);font:600 13px var(--body);padding:6px 10px;cursor:pointer}
+.mychip button.x{color:var(--muted);padding:6px 9px;border-left:1px solid var(--line)}
 #followBtn{position:absolute;z-index:1000;right:max(10px,env(safe-area-inset-right,0px));bottom:16px}
 .arrow{color:#fff;font-size:12px;line-height:12px;text-shadow:0 0 2px #000,0 0 2px #000}
 .me{width:16px;height:16px;border-radius:50%;background:#1c7ed6;border:3px solid #fff;box-shadow:0 0 0 2px rgba(28,126,214,.35)}
@@ -108,6 +114,14 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
       <div id="hudMsg">위치 찾는 중…</div>
     </div>
     <button class="btn primary small" id="followBtn" type="button" hidden>◎ 내 위치 따라가기</button>
+    <div id="drawBar" hidden>
+      <div id="drawTxt">달릴 길을 따라 지도를 차례로 눌러 주세요. 마지막 점은 첫 점과 자동으로 이어져요.</div>
+      <div class="row">
+        <button class="btn ghost small" id="drawUndo" type="button">↶ 되돌리기</button>
+        <button class="btn ghost small" id="drawCancel" type="button">취소</button>
+        <button class="btn primary small grow" id="drawDone" type="button">완성</button>
+      </div>
+    </div>
   </div>
 
   <div id="panel">
@@ -134,7 +148,11 @@ button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline
         <input type="number" id="lapMax" min="1" max="20" step="1" value="5" aria-label="최대 바퀴 수"> 바퀴
       </div>
       <label class="check"><input type="checkbox" id="prefBig" checked> 큰길 옆 보도도 피하기 (단지 안쪽 길 우선)</label>
-      <button class="btn primary" id="goBtn" type="button">코스 찾기</button>
+      <div class="row">
+        <button class="btn primary grow" id="goBtn" type="button">코스 찾기</button>
+        <button class="btn ghost" id="drawBtn" type="button">✏️ 직접 그리기</button>
+      </div>
+      <div class="row" id="myList" hidden></div>
     </div>
 
     <div id="status"></div>
@@ -188,7 +206,8 @@ const startMarker = L.marker(start, { draggable: true, title: '출발점' }).add
   .bindTooltip('출발', { permanent: true, direction: 'top', offset: [-15, -12] });
 function setStart(p, pan) { start = p; startMarker.setLatLng(p); if (pan) map.setView(p, 16); saveSettings(); schedulePrefetch(); }
 startMarker.on('dragend', e => { const p = e.target.getLatLng(); setStart([p.lat, p.lng]); });
-map.on('click', e => { if (!run) setStart([e.latlng.lat, e.latlng.lng]); });
+map.on('click', e => { if (drawing) addDrawPoint([e.latlng.lat, e.latlng.lng]); else if (!run) setStart([e.latlng.lat, e.latlng.lng]); });
+let drawing = null;
 
 const status = (msg, err) => { $('status').textContent = msg; $('status').className = err ? 'err' : ''; };
 
@@ -197,9 +216,14 @@ function setKm(v) {
   $('kmInput').value = v;
   document.querySelectorAll('#distChips .chip').forEach(x => x.setAttribute('aria-pressed', x.dataset.km === String(v)));
 }
-document.querySelectorAll('#distChips .chip').forEach(b => b.onclick = () => { setKm(b.dataset.km); saveSettings(); schedulePrefetch(); });
-$('kmInput').oninput = () => { setKm($('kmInput').value); saveSettings(); schedulePrefetch(); };
-['paceInput', 'lapMax'].forEach(id => $(id).onchange = () => { saveSettings(); if (all.length) { pickCands(); draw(); } });
+document.querySelectorAll('#distChips .chip').forEach(b => b.onclick = () => { setKm(b.dataset.km); saveSettings(); schedulePrefetch(); replan(); });
+function replan() { // 거리·바퀴 설정이 바뀌면 다시 계산
+  if (run || !cands.length) return;
+  if (cands[0].type === '직접') { const c = cands[0], rev = c.rev; cands = [drawnCand(c.pts, c.name)]; cands[0].rev = rev; draw(); }
+  else if (all.length) { lastD = parseFloat($('kmInput').value) * 1000 || lastD; pickCands(); draw(); }
+}
+$('kmInput').oninput = () => { setKm($('kmInput').value); saveSettings(); schedulePrefetch(); replan(); };
+['paceInput', 'lapMax'].forEach(id => $(id).onchange = () => { saveSettings(); replan(); });
 $('prefBig').onchange = saveSettings;
 function saveSettings() {
   store.set('rc:settings', { start, km: $('kmInput').value, pace: $('paceInput').value, lapMax: $('lapMax').value, big: $('prefBig').checked });
@@ -539,12 +563,12 @@ $('goBtn').onclick = async () => {
     for (let i = 0; i < G.n; i++) { if (comp[i] < 0) continue; const d = Math.hypot(G.P[i][0], G.P[i][1]); if (d <= 200) opts.push([d - Math.min(60, compLen[comp[i]] / 20), i, d]); }
     opts.sort((a, b) => a[0] - b[0]);
     const pick = opts.find(o => !G.crossesRoad([0, 0], G.P[o[1]]));
-    if (!pick) throw new Error('출발점 200m 안에 찻길 건너지 않고 갈 수 있는 안전한 길이 없어요. 아파트 단지나 공원 안쪽을 눌러 보세요.');
+    if (!pick) throw new Error('출발점 200m 안에 찻길 건너지 않고 갈 수 있는 안전한 길이 없어요. 아파트 단지나 공원 안쪽을 누르거나, 지도에 단지 안 길이 없으면 ✏️ 직접 그리기로 코스를 그려 보세요.');
     const s = pick[1]; snapGap = pick[2];
     status('바퀴 코스 찾는 중…');
     await sleep(20);
     all = findLaps(G, s, D, $('prefBig').checked);
-    if (!all.length) throw new Error('이 근처 안전한 길로는 바퀴를 만들 수 없어요. 출발점을 단지 안쪽 다른 곳으로 옮겨 보세요.');
+    if (!all.length) throw new Error('이 근처 안전한 길로는 바퀴를 만들 수 없어요. 출발점을 옮기거나 ✏️ 직접 그리기로 코스를 그려 보세요.');
     pickCands(); draw();
     $('results').hidden = false;
     const c = cands[0];
@@ -589,13 +613,13 @@ function draw() {
     const b = document.createElement('button');
     b.type = 'button'; b.className = 'cand'; b.setAttribute('aria-pressed', i === selected);
     b.innerHTML = `<span class="top"><span class="dot" style="background:${COLORS[i]}"></span><b>${km(o.total)}</b><span class="sub">km</span></span>
-      <span class="badge ok">찻길 안 건넘</span><span class="sub">${o.type === '왕복' ? '왕복' : '한 바퀴'} ${Math.round(o.C)}m × ${o.n}<br>약 ${fmtMin(o.total / 1000 * pace)}</span>`;
+      ${o.type === '직접' ? '<span class="badge ok">직접 그린 코스</span>' : '<span class="badge ok">찻길 안 건넘</span>'}<span class="sub">${o.type === '왕복' ? '왕복' : '한 바퀴'} ${Math.round(o.C)}m × ${o.n}<br>약 ${fmtMin(o.total / 1000 * pace)}</span>`;
     b.onclick = () => { selected = i; draw(); };
     $('cands').appendChild(b);
   });
   const pct = v => Math.round(v * 100) + '%';
   $('detail').textContent = `한 바퀴 ${km(c.C)}km × ${c.n}바퀴` + (c.stemLen > 5 ? ` + 오가는 길 ${km(2 * c.stemLen)}km` : '') +
-    ` · ${c.rev ? '반대 방향' : '기본 방향'} · 큰길 옆 ${pct(c.near)} · 같은 길 되밟기 ${pct(c.overlap)}`;
+    ` · ${c.rev ? '반대 방향' : '기본 방향'}` + (c.type === '직접' ? ' · 직접 그린 코스는 찻길 여부를 확인 못 해요' : ` · 큰길 옆 ${pct(c.near)} · 같은 길 되밟기 ${pct(c.overlap)}`);
 }
 $('revBtn').onclick = () => { const c = cands[selected]; if (!c) return; c.rev = !c.rev; draw(); };
 $('gpxBtn').onclick = () => {
@@ -607,6 +631,84 @@ $('gpxBtn').onclick = () => {
   a.download = `course-${km(c.total)}km.gpx`; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 };
+
+// ---------- 직접 그리기 · 내 코스 ----------
+function loopLen(pts) { let s = 0; for (let i = 1; i < pts.length; i++) s += map.distance(pts[i - 1], pts[i]); return s; }
+function closeLoop(pts) { return pts.concat([pts[0]]); }
+function drawnCand(pts, name) {
+  if (!P0) setProj(pts[0][0], pts[0][1]);
+  const lapLL = closeLoop(pts), C = loopLen(lapLL), D = parseFloat($('kmInput').value) * 1000 || C;
+  const n = Math.max(1, Math.round(D / C));
+  return { type: '직접', name, pts, C, n, total: n * C, stemLen: 0, overlap: 0, near: 0, lapLL, stemLL: [], rev: false, set: new Set(), overlapSet() { return 0; } };
+}
+function showDrawn(pts, name) {
+  setProj(pts[0][0], pts[0][1]);
+  all = []; cands = [drawnCand(pts, name)]; selected = 0;
+  $('results').hidden = false; draw();
+  const c = cands[0];
+  status(`${name}: 한 바퀴 ${Math.round(c.C)}m × ${c.n}바퀴 = ${km(c.total)}km. 거리를 바꾸면 바퀴 수가 다시 계산돼요.`);
+  if (matchMedia('(max-width: 819px)').matches) setCollapsed(true);
+}
+function updateDrawLayer() {
+  drawing.layers.forEach(l => map.removeLayer(l)); drawing.layers = [];
+  const p = drawing.pts;
+  if (p.length > 1) drawing.layers.push(L.polyline(p, { color: COLORS[0], weight: 5 }).addTo(map));
+  if (p.length > 2) drawing.layers.push(L.polyline([p[p.length - 1], p[0]], { color: COLORS[0], weight: 3, dashArray: '4 6' }).addTo(map));
+  p.forEach((q, i) => drawing.layers.push(L.circleMarker(q, { radius: i ? 4 : 7, color: '#fff', weight: 2, fillColor: COLORS[0], fillOpacity: 1, interactive: false }).addTo(map)));
+  const len = p.length > 2 ? loopLen(closeLoop(p)) : loopLen(p);
+  $('drawTxt').innerHTML = p.length < 3 ? '달릴 길을 따라 지도를 차례로 눌러 주세요. 마지막 점은 첫 점과 자동으로 이어져요.'
+    : `한 바퀴 <b>${Math.round(len)}m</b> · 점 ${p.length}개 · 모퉁이마다 눌러 주면 더 정확해요`;
+  $('drawDone').disabled = p.length < 3;
+}
+function addDrawPoint(p) { drawing.pts.push(p); updateDrawLayer(); }
+function endDraw() {
+  if (!drawing) return;
+  drawing.layers.forEach(l => map.removeLayer(l)); drawing = null;
+  $('drawBar').hidden = true; $('panel').classList.remove('running');
+  startMarker.setOpacity(1);
+  setTimeout(() => map.invalidateSize(), 50);
+}
+$('drawBtn').onclick = () => {
+  cands = []; draw(); $('results').hidden = true;
+  drawing = { pts: [], layers: [] };
+  $('drawBar').hidden = false; $('panel').classList.add('running'); // 조작판 숨김
+  startMarker.setOpacity(0.4);
+  map.setView(start, Math.max(map.getZoom(), 17));
+  status('직접 그리는 중이에요.');
+  setTimeout(() => map.invalidateSize(), 50);
+  updateDrawLayer();
+};
+$('drawUndo').onclick = () => { if (drawing && drawing.pts.length) { drawing.pts.pop(); updateDrawLayer(); } };
+$('drawCancel').onclick = () => { endDraw(); status(''); };
+$('drawDone').onclick = () => {
+  if (!drawing || drawing.pts.length < 3) return;
+  const pts = drawing.pts.map(p => [Math.round(p[0] * 1e6) / 1e6, Math.round(p[1] * 1e6) / 1e6]);
+  endDraw();
+  const my = store.get('rc:my', []);
+  const name = `내 코스 ${my.length ? Math.max(...my.map(m => m.no || 0)) + 1 : 1}`;
+  my.push({ no: my.length ? Math.max(...my.map(m => m.no || 0)) + 1 : 1, name, pts, len: Math.round(loopLen(closeLoop(pts))) });
+  store.set('rc:my', my.slice(-20));
+  renderMy();
+  showDrawn(pts, name);
+};
+function renderMy() {
+  const my = store.get('rc:my', []), box = $('myList');
+  box.innerHTML = ''; box.hidden = !my.length;
+  if (!my.length) return;
+  const lab = document.createElement('span'); lab.className = 'label'; lab.textContent = '내 코스'; box.appendChild(lab);
+  my.forEach((m, i) => {
+    const chip = document.createElement('span'); chip.className = 'mychip';
+    const b = document.createElement('button'); b.type = 'button'; b.textContent = `${m.name} · ${m.len}m`;
+    b.onclick = () => { map.setView(m.pts[0], 17); showDrawn(m.pts, m.name); };
+    const x = document.createElement('button'); x.type = 'button'; x.className = 'x'; x.textContent = '×'; x.setAttribute('aria-label', m.name + ' 지우기');
+    x.onclick = () => {
+      if (x.dataset.armed) { const arr = store.get('rc:my', []); arr.splice(i, 1); store.set('rc:my', arr); renderMy(); return; }
+      x.dataset.armed = '1'; x.textContent = '지울까요?'; setTimeout(() => { if (x.isConnected) { delete x.dataset.armed; x.textContent = '×'; } }, 3000);
+    };
+    chip.append(b, x); box.appendChild(chip);
+  });
+}
+renderMy();
 
 // ---------- 달리기 모드 ----------
 function resample(coords, step = 10) {
